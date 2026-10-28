@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Решала</title>
+<style>
+:root{--c:28px}
+*{box-sizing:border-box}
+body{margin:0;font-family:"Segoe Print","Bradley Hand","Noteworthy","Chilanka","Comic Sans MS","Caveat",cursive;color:#1a2f8a;min-height:100vh;background-color:#fdfdf7;background-image:linear-gradient(#cfe0f1 1px,transparent 1px),linear-gradient(90deg,#cfe0f1 1px,transparent 1px);background-size:var(--c) var(--c)}
+body::before{content:"";position:fixed;left:34px;top:0;bottom:0;width:2px;background:#e57373}
+.w{max-width:600px;margin:auto;padding:14px 12px 40px 46px}
+h1{font-size:26px;margin:0 0 8px;line-height:var(--c)}
+h2{font-size:24px;margin:8px 0 0;line-height:28px}.cls{font-size:17px;color:#555}
+h3{font-size:19px;margin:16px 0 4px;line-height:var(--c)}
+select,input,button,textarea{font:inherit;font-size:18px;border-radius:8px;border:2px solid #1a2f8a;background:rgba(255,255,255,.85);color:#1a2f8a;padding:9px;width:100%;margin:4px 0}
+button{background:#1a2f8a;color:#fff}
+.tabs,.row{display:flex;gap:6px}.row button{flex:1}#go{flex:2}
+.tabs button{background:#fff;color:#1a2f8a}.tabs button.on{background:#1a2f8a;color:#fff}
+.keys{display:flex;gap:5px;flex-wrap:wrap}.keys button{width:auto;flex:1;min-width:42px;padding:6px 2px;background:#fff;color:#1a2f8a}
+.paper{background:rgba(253,253,247,.93);border-radius:8px;padding:8px 12px;margin-top:10px;line-height:1.4}
+.err{border:2px solid #d32f2f;color:#b71c1c}.said{color:#555;font-size:16px}
+.nb{font-size:21px}
+.ln{line-height:var(--c);min-height:var(--c);white-space:pre-wrap;clip-path:inset(0 100% 0 0);animation:write .6s ease-out forwards}
+@keyframes write{to{clip-path:inset(0 0 0 0)}}
+.red{color:#d32f2f;font-weight:bold;text-decoration:underline;background:linear-gradient(transparent 60%,#ffe08a 60%)}
+.cm{font-size:15px;color:#2e7d32;margin-left:10px}
+ol{margin:0;padding-left:20px;color:#333;font-size:17px}li{margin:6px 0}
+.rule{background:#fff3b0;border-left:4px solid #f9a825;padding:6px 10px;margin:8px 0;color:#333;font-size:17px;border-radius:4px}
+.hide{display:none}
+</style></head><body><div class="w">
+<select id="cls"></select>
+<button id="aibtn" class="hide"></button>
+<div class="tabs"><button id="t1" class="on">Пример / задача</button><button id="t2">Геометрия</button></div>
+<div id="s1">
+<textarea id="inp" rows="2" placeholder="5+3×2, √16, 2(x+1)=10 или задача словами" autocomplete="off"></textarea>
+<div class="keys" id="keys"></div>
+<div class="row"><button id="mic">🎤</button><button id="cam">📷</button><button id="gal">🖼</button><button id="go">✏️ Решить</button></div>
+<input id="ph" type="file" accept="image/*" class="hide"><input id="ph2" type="file" accept="image/*" capture="environment" class="hide">
+</div>
+<div id="s2" class="hide">
+<select id="geo"></select>
+<div id="fields"></div>
+<button id="go2">✏️ Решить</button>
+</div>
+<div id="out"></div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const fmt=(n,d=9)=>{const p=10**d;return String(Math.round(n*p)/p).replace('.',',').replace(/^-/,'−');};
+const pr=n=>n<0?'('+fmt(n)+')':fmt(n);
+const r4=n=>fmt(n,4);
+const SYM={'*':'×','/':'÷','+':'+','-':'−','√':'√','∛':'∛','^':'^'};
+
+/* ---------- ПРИМЕРЫ ---------- */
+function tokenize(s){
+  s=s.replace(/\s+/g,'').replace(/,/g,'.').replace(/[×·]/g,'*').replace(/[÷:]/g,'/').replace(/[−–]/g,'-').replace(/²/g,'^2').replace(/³/g,'^3');
+  if(!/^[0-9+\-*/().√∛^]+$/.test(s))return null;
+  const t=[];let i=0;
+  while(i<s.length){
+    if(/[0-9.]/.test(s[i])){let j=i;while(j<s.length&&/[0-9.]/.test(s[j]))j++;const n=parseFloat(s.slice(i,j));if(isNaN(n))return null;t.push(n);i=j;}
+    else{t.push(s[i]);i++;}
+  }
+  const r=[];
+  for(let k=0;k<t.length;k++){
+    const x=t[k],p=r[r.length-1];
+    if(x==='-'&&(k===0||p==='('||['+','-','*','/','^'].includes(p))){
+      const nx=t[k+1];
+      if(typeof nx==='number'&&t[k+2]!=='^'){r.push(-nx);k++;}
+      else if(typeof nx==='number'||nx==='('||nx==='√'||nx==='∛'){r.push(-1,'*');}
+      else return null;
+    }else r.push(x);
+  }
+  return r;
+}
+function solveExpr(src){
+  const t=tokenize(src);
+  if(!t||!t.length)return{err:'Не понял пример. Можно: цифры, + − × ÷ ( ) ^ √'};
+  const show=a=>a.map((x,i)=>typeof x==='number'?(x<0&&i>0?'('+fmt(x)+')':fmt(x)):(SYM[x]||x)).join(' ').replace(/([√∛]) /g,'$1').replace(/ \^ /g,'^');
+  const steps=['Пример: '+show(t)],rules=new Set(),nb=[show(t)];
+  let guard=0;
+  while(t.length>1&&guard++<300){
+    const lo=t.lastIndexOf('(');let s0=0,e0=t.length,inP=false;
+    if(lo>=0){
+      const cl=t.indexOf(')',lo);
+      if(cl<0)return{err:'Не хватает закрывающей скобки'};
+      s0=lo+1;e0=cl;inP=true;
+      if(e0===s0)return{err:'Пустые скобки'};
+      if(e0-s0===1){t.splice(cl,1);t.splice(lo,1);steps.push('Убираем скобки: '+show(t));nb.push('= '+show(t)+' ‖ скобки убрали');continue;}
+    }else if(t.includes(')'))return{err:'Лишняя закрывающая скобка'};
+    let idx=-1,kind='';
+    for(let i=s0;i<e0-1;i++)if((t[i]==='√'||t[i]==='∛')&&typeof t[i+1]==='number'){idx=i;kind='r';break;}
+    if(idx<0)for(let i=e0-1;i>=s0;i--)if(t[i]==='^'){idx=i;kind='b';break;}
+    if(idx<0)for(let i=s0;i<e0;i++)if(t[i]==='*'||t[i]==='/'){idx=i;kind='b';break;}
+    if(idx<0)for(let i=s0;i<e0;i++)if(t[i]==='+'||t[i]==='-'){idx=i;kind='b';break;}
+    if(idx<0)return{err:'Между числами пропущен знак действия'};
+    if(inP)rules.add('Сначала выполняем действия в скобках.');
+    let line;
+    if(kind==='r'){
+      const op=t[idx],n=t[idx+1];
+      if(op==='√'&&n<0)return{err:'Корень из отрицательного числа не извлекается'};
+      const r=op==='√'?Math.sqrt(n):Math.cbrt(n);
+      rules.add(op==='√'?'Квадратный корень √a — это число, которое в квадрате даёт a.':'Кубический корень ∛a — это число, которое в кубе даёт a.');
+      if(!Number.isInteger(r))rules.add('Корень, который не извлекается точно, считаем приближённо.');
+      line=`${op}${fmt(n)} = ${fmt(r,6)}`;t.splice(idx,2,r);
+    }else{
+      const a=t[idx-1],b=t[idx+1],op=t[idx];
+      if(idx-1<s0||idx+1>=e0||typeof a!=='number'||typeof b!=='number')return{err:'Ошибка в записи примера'};
+      let r;
+      if(op==='^'){r=Math.pow(a,b);if(!isFinite(r))return{err:'Не получилось возвести в степень'};rules.add('Степень aⁿ — это a, умноженное само на себя n раз. Степень считаем раньше умножения.');}
+      else if(op==='*'||op==='/'){
+        if(op==='/'&&b===0)return{err:'На ноль делить нельзя'};
+        r=op==='*'?a*b:a/b;rules.add('Умножение и деление выполняются раньше сложения и вычитания.');
+      }else{r=op==='+'?a+b:a-b;rules.add('Сложение и вычитание выполняем по порядку, слева направо.');}
+      line=`${fmt(a)} ${SYM[op]||op} ${fmt(b)} = ${fmt(r)}`;t.splice(idx-1,3,r);
+    }
+    const why=inP?'в скобках считаем первыми':kind==='r'?'считаем корень':t.length&&line.includes('^')?'степень считаем раньше умножения':/[×÷]/.test(line)?'× и ÷ раньше + и −':'+ и − идут по порядку';
+    steps.push(line+'  →  '+show(t));nb.push('= '+show(t)+' ‖ '+line.replace(/ = [^=]*$/,' = '+line.split(' = ').pop())+' ('+why+')');
+  }
+  if(t.length!==1||typeof t[0]!=='number')return{err:'Не получилось решить пример'};
+  nb.push('Ответ: '+fmt(t[0],6));
+  return{answer:fmt(t[0],6),steps,rules:[...rules],topic:'expr',nb};
+}
+
+/* ---------- УРАВНЕНИЯ ---------- */
+function polyParse(s){
+  let i=0;const err=()=>{throw 0;};
+  const add=(p,q,sg)=>[0,1,2].map(k=>p[k]+sg*q[k]);
+  const mul=(p,q)=>{const r=[0,0,0,0,0];for(let a=0;a<3;a++)for(let b=0;b<3;b++)r[a+b]+=p[a]*q[b];if(r[3]||r[4])err();return r.slice(0,3);};
+  function expr(){let p=term();while(s[i]==='+'||s[i]==='-'){const sg=s[i++]==='-'?-1:1;p=add(p,term(),sg);}return p;}
+  function term(){let p=unary();
+    while(i<s.length&&(s[i]==='*'||s[i]==='/'||s[i]==='('||s[i]==='x'||/[0-9.]/.test(s[i]))){
+      if(s[i]==='/'){i++;const q=unary();if(q[1]||q[2]||q[0]===0)err();p=p.map(v=>v/q[0]);}
+      else{if(s[i]==='*')i++;p=mul(p,unary());}
+    }return p;}
+  function unary(){if(s[i]==='-'){i++;return unary().map(v=>-v);}if(s[i]==='+'){i++;return unary();}return pow();}
+  function pow(){let b=atom();if(s[i]==='^'){i++;const n=parseInt(s[i++]);if(!(n>=1&&n<=2))err();if(n===2)b=(b[1]||b[2])?mul(b,b):[b[0]*b[0],0,0];}return b;}
+  function atom(){const c=s[i];
+    if(c==='('){i++;const p=expr();if(s[i++]!==')')err();return p;}
+    if(c==='x'){i++;return[0,1,0];}
+    const m=s.slice(i).match(/^\d*\.?\d+/);if(!m)err();i+=m[0].length;return[parseFloat(m[0]),0,0];}
+  try{const p=expr();if(i!==s.length)return null;return p.map(v=>Math.round(v*1e9)/1e9);}catch(e){return null;}
+}
+function parseSide(s){const p=polyParse(s);return p?{a0:p[0],a1:p[1],a2:p[2]}:null;}
+function polyStr(a2,a1,a0){
+  let out='';
+  const add=(c,v)=>{
+    if(c===0)return;
+    const abs=Math.abs(c),num=(abs===1&&v)?'':fmt(abs),body=num+v;
+    out+=out===''?(c<0?'−':'')+body:` ${c<0?'−':'+'} ${body}`;
+  };
+  add(a2,'x²');add(a1,'x');add(a0,'');
+  return out||'0';
+}
+function solveEq(src){
+  const s=src.toLowerCase().replace(/\s+/g,'').replace(/,/g,'.').replace(/²/g,'^2').replace(/[−–]/g,'-').replace(/[×·]/g,'*').replace(/х/g,'x');
+  const parts=s.split('=');
+  if(parts.length!==2||!parts[0]||!parts[1])return{err:'Нужна запись вида: 2x + 3 = 11'};
+  const L=parseSide(parts[0]),R=parseSide(parts[1]);
+  if(!L||!R)return{err:'Не понял уравнение. Примеры: 2x+3=11, 2(x+1)=10, x/2=3, x^2-5x+6=0 (неизвестная — x)'};
+  const steps=['Уравнение: '+polyStr(L.a2,L.a1,L.a0)+' = '+polyStr(R.a2,R.a1,R.a0)];
+  const a=L.a2-R.a2,b=L.a1-R.a1,c=L.a0-R.a0;
+  if(a!==0){
+    const rules=['Квадратное уравнение: ax² + bx + c = 0.','Дискриминант: D = b² − 4ac.','D > 0 — два корня, D = 0 — один корень, D < 0 — корней нет.','Корни: x = (−b ± √D) / (2a).'];
+    if(R.a2||R.a1||R.a0)steps.push('Переносим всё в левую часть: '+polyStr(a,b,c)+' = 0');
+    steps.push(`a = ${fmt(a)}, b = ${fmt(b)}, c = ${fmt(c)}`);
+    const D=b*b-4*a*c;
+    steps.push(`D = b² − 4ac = ${pr(b)}² − 4·${pr(a)}·${pr(c)} = ${fmt(D)}`);
+    if(D<0){steps.push('D < 0, значит действительных корней нет.');return{answer:'Корней нет',steps,rules,topic:'quad'};}
+    if(D===0){const x=-b/(2*a);steps.push(`D = 0, один корень: x = −b / (2a) = ${fmt(-b)} / ${fmt(2*a)} = ${r4(x)}`);return{answer:'x = '+r4(x),steps,rules,topic:'quad'};}
+    const q=Math.sqrt(D),x1=(-b+q)/(2*a),x2=(-b-q)/(2*a);
+    steps.push(`D > 0, два корня. √D = ${r4(q)}`);
+    steps.push(`x₁ = (−b + √D) / (2a) = (${fmt(-b)} + ${r4(q)}) / ${fmt(2*a)} = ${r4(x1)}`);
+    steps.push(`x₂ = (−b − √D) / (2a) = (${fmt(-b)} − ${r4(q)}) / ${fmt(2*a)} = ${r4(x2)}`);
+    return{answer:`x₁ = ${r4(x1)}, x₂ = ${r4(x2)}`,steps,rules,topic:'quad'};
+  }
+  const rules=['Слагаемое можно перенести в другую часть уравнения, поменяв знак на противоположный.','Обе части уравнения можно разделить на число, не равное нулю.','Проверка: подставляем ответ в уравнение.'];
+  const k=-c;
+  if(R.a1||L.a0)steps.push('Переносим слагаемые с x влево, числа вправо (знак меняется): '+polyStr(0,b,0)+' = '+fmt(k));
+  if(b===0){
+    steps.push(`Получилось 0·x = ${fmt(k)}`);
+    return{answer:k===0?'Любое число':'Решений нет',steps,rules,topic:'lin'};
+  }
+  const x=k/b;
+  steps.push(`Делим обе части на ${pr(b)}: x = ${fmt(k)} / ${pr(b)} = ${r4(x)}`);
+  steps.push(`Проверка: x = ${r4(x)}. Левая часть = ${r4(L.a1*x+L.a0)}, правая часть = ${r4(R.a1*x+R.a0)}`);
+  return{answer:'x = '+r4(x),steps,rules,topic:'lin'};
+}
+
+const MIN={expr:1,lin:6,quad:8};
+function solve(src,cls){
+  src=(src||'').trim();
+  if(!src)return{err:'Введите пример или уравнение'};
+  let res;
+  if(src.includes('='))res=solveEq(src);
+  else if(/[xх]/i.test(src))return{err:'Для уравнения добавьте знак =, например: 2x+3=11'};
+  else res=solveExpr(src);
+  if(!res.err&&!res.nb)res.nb=[...res.steps.map(s=>{const m=s.match(/^([^:=]*[а-я][^:=]*):\s*(.+)$/i);return(m&&!/^Проверка/.test(s))?m[2]+' ‖ '+m[1]:s;}),'Ответ: '+res.answer];
+  const min=MIN[res.topic]||1;
+  if(!res.err&&cls<min)res.note=`Эта тема обычно проходится с ${min} класса. Решение показано, но оно может быть сложным.`;
+  return res;
+}
+
+/* ---------- ГЕОМЕТРИЯ ---------- */
+const GEO={
+rect:{name:'Прямоугольник',min:3,f:[['a','Сторона a'],['b','Сторона b']],run:v=>{const S=v.a*v.b,P=2*(v.a+v.b);return{answer:`S = ${fmt(S)}, P = ${fmt(P)}`,steps:[`S = a × b = ${fmt(v.a)} × ${fmt(v.b)} = ${fmt(S)}`,`P = 2 × (a + b) = 2 × (${fmt(v.a)} + ${fmt(v.b)}) = ${fmt(P)}`],rules:['Площадь прямоугольника: S = a × b.','Периметр — сумма всех сторон: P = 2 × (a + b).']};}},
+square:{name:'Квадрат',min:3,f:[['a','Сторона a']],run:v=>{const S=v.a*v.a,P=4*v.a;return{answer:`S = ${fmt(S)}, P = ${fmt(P)}`,steps:[`S = a × a = ${fmt(v.a)} × ${fmt(v.a)} = ${fmt(S)}`,`P = 4 × a = 4 × ${fmt(v.a)} = ${fmt(P)}`],rules:['Площадь квадрата: S = a².','Периметр квадрата: P = 4 × a.']};}},
+tri:{name:'Треугольник (площадь)',min:5,f:[['a','Основание a'],['h','Высота h']],run:v=>{const S=v.a*v.h/2;return{answer:`S = ${fmt(S)}`,steps:[`S = a × h ÷ 2 = ${fmt(v.a)} × ${fmt(v.h)} ÷ 2 = ${fmt(S)}`],rules:['Площадь треугольника: S = (основание × высота) ÷ 2.']};}},
+circle:{name:'Круг',min:6,f:[['r','Радиус r']],run:v=>{const S=Math.PI*v.r*v.r,C=2*Math.PI*v.r;return{answer:`S = ${fmt(S,2)}, C = ${fmt(C,2)}`,steps:[`S = π × r² = 3,14159 × ${fmt(v.r)}² = ${fmt(S,2)}`,`C = 2 × π × r = 2 × 3,14159 × ${fmt(v.r)} = ${fmt(C,2)}`],rules:['Площадь круга: S = π × r².','Длина окружности: C = 2 × π × r.','π ≈ 3,14159.']};}},
+pyth:{name:'Теорема Пифагора (гипотенуза)',min:8,f:[['a','Катет a'],['b','Катет b']],run:v=>{const s=v.a*v.a+v.b*v.b,c=Math.sqrt(s);return{answer:`c = ${fmt(c,4)}`,steps:[`c² = a² + b² = ${fmt(v.a)}² + ${fmt(v.b)}² = ${fmt(s)}`,`c = √${fmt(s)} = ${fmt(c,4)}`],rules:['В прямоугольном треугольнике: c² = a² + b², где c — гипотенуза.']};}}
+};
+function solveGeo(key,vals,cls){
+  const g=GEO[key];
+  for(const f of g.f)if(!(vals[f[0]]>0))return{err:'Введите положительные числа во все поля'};
+  const res=g.run(vals);
+  const FIND={rect:'S, P',square:'S, P',tri:'S',circle:'S, C',pyth:'c'};
+  res.nb=['Дано: '+g.f.map(f=>f[0]+' = '+fmt(vals[f[0]])).join(', '),'Найти: '+FIND[key],'Решение:',...res.steps,'Ответ: '+res.answer];
+  if(cls<g.min)res.note=`Эта тема обычно проходится с ${g.min} класса. Решение показано, но оно может быть сложным.`;
+  return res;
+}
+
+
+/* ---------- СЛОВА, ГОЛОС, ФОТО ---------- */
+const NUM={ноль:0,один:1,одна:1,одно:1,два:2,две:2,три:3,четыре:4,пять:5,шесть:6,семь:7,восемь:8,девять:9,десять:10,одиннадцать:11,двенадцать:12,тринадцать:13,четырнадцать:14,пятнадцать:15,шестнадцать:16,семнадцать:17,восемнадцать:18,девятнадцать:19,двадцать:20,тридцать:30,сорок:40,пятьдесят:50,шестьдесят:60,семьдесят:70,восемьдесят:80,девяносто:90,сто:100,двести:200,триста:300,четыреста:400,пятьсот:500,шестьсот:600,семьсот:700,восемьсот:800,девятьсот:900};
+function numWords(s,skipOne){
+  const w=s.split(/\s+/),out=[];let i=0;
+  const cl=x=>x.replace(/[.,!?]/g,'');
+  while(i<w.length){
+    if(cl(w[i]) in NUM){
+      let tot=0,cur=0,j=i;
+      while(j<w.length){const q=cl(w[j]);
+        if(q in NUM){cur+=NUM[q];j++;}
+        else if(/^тысяч/.test(q)&&j>i){tot+=(cur||1)*1000;cur=0;j++;}
+        else break;}
+      if(skipOne&&j-i===1&&/^(один|одна|одно)[.,!?]?$/.test(w[i]))out.push(w[i]);else out.push(String(tot+cur));i=j;
+    }else{out.push(w[i]);i++;}
+  }
+  return out.join(' ');
+}
+const OPS=[['квадратный корень из','√'],['кубический корень из','∛'],['кубический корень','∛'],['корень из','√'],['корень','√'],['умножить на','*'],['помножить на','*'],['умножить','*'],['разделить на','/'],['поделить на','/'],['делить на','/'],['плюс','+'],['минус','-'],['в кубе','^3'],['в степени','^'],['в квадрате','^2'],['икс','x'],['равняется','='],['равно','='],['открыть скобку','('],['открывающая скобка','('],['закрыть скобку',')'],['закрывающая скобка',')']];
+const FILL=['сколько будет','чему равно','сколько','посчитай','вычисли','реши','решить','пример','уравнение','найди','пожалуйста','будет'];
+const NUMRE='(\\d+(?:[.,]\\d+)?)';
+function nums(t){return(t.match(/\d+(?:[.,]\d+)?/g)||[]).map(x=>parseFloat(x.replace(',','.')));}
+function fixNums(t){
+  t=t.replace(/\b\d{1,3}(?:[.\u00a0]\d{3})+\b/g,m=>m.replace(/[.\u00a0]/g,''));
+  t=t.replace(new RegExp(NUMRE+'\\s*тысяч\\w*','g'),(m,n)=>String(parseFloat(n.replace(',','.'))*1000));
+  t=t.replace(new RegExp(NUMRE+'\\s*миллион\\w*','g'),(m,n)=>String(parseFloat(n.replace(',','.'))*1e6));
+  return t;
+}
+const WP={
+'-':{rule:'Чтобы найти, сколько осталось, нужно от числа, которое было сначала, отнять то, что отдали или потратили.',f:'a − b = c',w:['a — сколько было','b — сколько отдали','c — сколько осталось'],s:['Сначала узнаём, сколько было — {A}.','Затем определяем, сколько отдали или потратили — {B}.','Вычитаем отданное из первоначального: {E}','Получаем результат: осталось {C}.'],rem:'Чтобы найти остаток, нужно выполнить вычитание: из того, что было, вычесть то, что отдали.',ex:'Если было {A} и {B} отдали, останется {C}.'},
+'+':{rule:'Чтобы найти, сколько стало всего, нужно сложить то, что было, и то, что добавили.',f:'a + b = c',w:['a — сколько было','b — сколько добавили','c — сколько стало'],s:['Сначала узнаём, сколько было — {A}.','Затем определяем, сколько добавили — {B}.','Складываем: {E}','Получаем результат: стало {C}.'],rem:'Чтобы найти, сколько стало, нужно выполнить сложение: к тому, что было, прибавить то, что добавили.',ex:'Если было {A} и добавили {B}, станет {C}.'},
+'*':{rule:'Чтобы найти, сколько всего, когда одинаковые части повторяются, нужно умножить, сколько в одной части, на число частей.',f:'a × b = c',w:['a — сколько в одной части','b — сколько частей','c — сколько всего'],s:['Сначала узнаём, сколько в одной части — {A}.','Затем определяем, сколько таких частей — {B}.','Умножаем: {E}','Получаем результат: всего {C}.'],rem:'Чтобы найти, сколько всего в одинаковых частях, нужно выполнить умножение.',ex:'Если в каждой части по {A}, а частей {B}, то всего {C}.'},
+'/':{rule:'Чтобы разделить поровну, нужно общее количество разделить на число частей.',f:'a ÷ b = c',w:['a — сколько всего','b — на сколько частей делим','c — сколько в каждой части'],s:['Сначала узнаём, сколько всего — {A}.','Затем определяем, на сколько частей делим — {B}.','Делим: {E}','Получаем результат: в каждой части {C}.'],rem:'Чтобы разделить поровну, нужно выполнить деление: общее число разделить на число частей.',ex:'Если всего {A}, а частей {B}, то в каждой {C}.'}
+};
+function wpSolve(op,nn,raw,cls){
+  if(op==='*'){const pm=raw.match(/по\s+(\d+(?:[.,]\d+)?)/i);if(pm){const a=parseFloat(pm[1].replace(',','.')),i=nn.indexOf(a);if(i>0){nn=nn.slice();nn.splice(i,1);nn.unshift(a);}}}
+  const r=solve(nn.join(op),cls);
+  if(r.err)return r;
+  const ex=nn.map(x=>fmt(x)).join(' '+SYM[op]+' ');
+  const E=ex+' = '+r.answer;
+  r.said=ex;
+  const SKIP=/^(и|а|раз|раза|по|на|в|с|из|за|его|ее|ей|у|он|она|их)$/;
+  let uw='';
+  for(const x of(raw.toLowerCase().replace(/ё/g,'е').match(/\d+(?:[.,]\d+)?\s+[а-я]+/g)||[])){const w=x.split(/\s+/)[1];if(!SKIP.test(w)){uw=w;break;}}
+  const q0=raw.match(/[Сс]колько\s+(\S+)/);
+  if(q0&&!/^(осталось|стало|станет|получилось|будет|всего|было)$/i.test(q0[1]))uw=q0[1].toLowerCase();
+  const rub=/рубл/.test(uw);
+  const dec=n=>{if(!rub)return uw;const i=Math.abs(n)%100,k=i%10;return(!Number.isInteger(n)||(i>10&&i<15)||k===0||k>4)?'рублей':k===1?'рубль':'рубля';};
+  const U=(n,on,last)=>fmt(n)+(on&&uw&&(rub||last)?' '+dec(n):'');
+  const un=op==='*'||op==='/';
+  const cv=parseFloat(r.answer.replace('−','-').replace(',','.'));
+  const A=U(nn[0],true,false),B=nn.slice(1).map(x=>U(x,!un,false)).join(' и '),C=U(cv,true,true);
+  const qm=raw.match(/[Сс]колько\s+(\S+)\s*([^?.!]*)/);let desc='';
+  if(qm){const v=/^(осталось|стало|станет|получилось|будет|всего|было)$/i.test(qm[1]);desc=(v?qm[1]+' '+qm[2]:qm[2]).trim();}
+  if(desc.length>28)desc=/остал|остан/.test(desc)?'осталось':'';
+  const w=WP[op],fill=s=>s.replace(/\{A\}/g,A).replace(/\{B\}/g,B).replace(/\{C\}/g,C).replace(/\{E\}/g,E);
+  r.nb=[`1) ${E}${uw?' ('+(rub?'руб.':uw)+')':''}${desc?' — '+desc:''}.`,`Ответ: ${C}.`];
+  r.steps=w.s.map(fill);
+  r.rules=[w.rule];
+  r.wp={rule:w.rule,f:w.f,w:w.w,rem:w.rem,ex1:E,ex2:fill(w.ex)};
+  return r;
+}
+const rd=n=>{const i=Math.abs(n)%100,k=i%10;return(!Number.isInteger(n)||(i>10&&i<15)||k===0||k>4)?'рублей':k===1?'рубль':'рубля';};
+function msSolve(n,raw,cls){
+  const t=raw.toLowerCase().replace(/ё/g,'е');
+  const A=Math.max(...n),rest=n.slice();rest.splice(rest.indexOf(A),1);
+  let P=null;const pm=t.match(/(?:стоил\w*|стоит|стоят|цена|по)\s+(\d+(?:[.,]\d+)?)/);
+  if(pm)P=parseFloat(pm[1].replace(',','.'));
+  if(P===null||!rest.includes(P))P=Math.max(...rest);
+  const N=rest[1-rest.indexOf(P)],S=N*P,R=A-S;
+  if(R<0)return{err:`Не хватает денег: покупка стоит ${fmt(S)}, а было ${fmt(A)}.`};
+  const rub=/рубл/.test(t),u=rub?' (руб.)':'';
+  const M=(v)=>fmt(v)+(rub?' '+rd(v):'');
+  const ans=M(R);
+  return{answer:ans,topic:'expr',said:`${fmt(A)} − ${fmt(N)} × ${fmt(P)}`,
+    nb:[`1) ${fmt(N)} × ${fmt(P)} = ${fmt(S)}${u} — стоит вся покупка.`,`2) ${fmt(A)} − ${fmt(S)} = ${fmt(R)}${u} — осталось.`,`Ответ: ${ans}.`],
+    steps:[`Сначала узнаём, сколько было — ${M(A)}.`,`Находим стоимость покупки: цену умножаем на количество: ${fmt(P)} × ${fmt(N)} = ${M(S)}.`,`Вычитаем стоимость покупки из того, что было: ${fmt(A)} − ${fmt(S)} = ${fmt(R)}.`,`Получаем результат: осталось ${ans}.`],
+    rules:[],
+    wp:{rule:'Сначала находим стоимость покупки: цену умножаем на количество. Потом от того, что было, отнимаем стоимость покупки.',f:'a × b = c<br>d − c = e',w:['a — цена одной штуки','b — сколько купили','c — стоимость покупки','d — сколько было','e — сколько осталось'],rem:'Чтобы найти остаток после покупки, сначала считаем стоимость покупки (умножение), потом вычитаем её из того, что было.',ex1:`${fmt(N)} × ${fmt(P)} = ${fmt(S)}`,ex2:`${fmt(A)} − ${fmt(S)} = ${fmt(R)}`}};
+}
+const LAT={'А':'A','В':'B','С':'C','Е':'E','К':'K','М':'M','Н':'H','О':'O','Р':'P','Т':'T'};
+const latinize=s=>s.replace(/(^|[^А-Яа-яA-Za-z])([АВСЕКМНОРТA-Z]{1,3})(?![А-Яа-яa-z])/g,(m,p,w)=>p+w.replace(/[АВСЕКМНОРТ]/g,c=>LAT[c]));
+const pf=x=>parseFloat(String(x).replace(',','.'));
+function geoText(raw){
+  const g=latinize(raw),tl=raw.toLowerCase().replace(/ё/g,'е');
+  const n=nums(fixNums(tl)),ang=/(^|[^а-я])уг(ол|ла|лы|лов|лу|лом)([^а-я]|$)/.test(tl);
+  const mk=(nb,ans,steps,rules,w)=>({answer:ans,nb:[...nb,'Ответ: '+ans],steps,rules,topic:'expr',wp:w});
+  const val={};
+  for(const m of g.matchAll(/([A-Z]{2})\s*=\s*(\d+(?:[.,]\d+)?)/g)){val[m[1]]=pf(m[2]);val[m[1][1]+m[1][0]]=pf(m[2]);}
+  const dano=Object.keys(val).filter((k,i)=>i%2===0).map(k=>k+' = '+fmt(val[k])).join(', ');
+  // средняя линия треугольника
+  const mm=g.match(/([A-Z])\s*(?:и|,)\s*([A-Z])\s+(?:являются\s+)?серед[а-я]+\s+сторон\s+([A-Z]{2})\s+и\s+([A-Z]{2})/);
+  const tg=g.match(/[Нн]айди(?:те)?\s+(?:длину\s+)?(?:отрезка\s+)?([A-Z]{2})/);
+  if(mm&&tg){
+    const s1=mm[3],s2=mm[4],cm=[...s1].find(c=>s2.includes(c));
+    if(cm){
+      const third=s1.replace(cm,'')+s2.replace(cm,''),mid=mm[1]+mm[2],tri=[...new Set(s1+s2)].sort().join('');
+      const rev=s=>s.split('').reverse().join(''),T=tg[1];
+      let ans=null,txt='';
+      if((T===mid||T===rev(mid))&&val[third]!==undefined){ans=val[third]/2;txt=`${T} = ½ · ${third} = ${fmt(val[third])} ÷ 2 = ${fmt(ans)}`;}
+      else if((T===third||T===rev(third))&&val[mid]!==undefined){ans=val[mid]*2;txt=`${T} = 2 · ${mid} = 2 · ${fmt(val[mid])} = ${fmt(ans)}`;}
+      if(ans!==null)return mk([
+        `Дано: △${tri}, ${mm[1]} — середина ${s1}, ${mm[2]} — середина ${s2}${dano?', '+dano:''}`,`Найти: ${T}`,
+        `${mid} — средняя линия △${tri} ‖ соединяет середины двух сторон`,`${mid} ∥ ${third} и ${mid} = ½ · ${third} ‖ свойство средней линии`,txt],
+        `${T} = ${fmt(ans)}`,
+        [`${mm[1]} — середина ${s1}, ${mm[2]} — середина ${s2}. Значит, ${mid} — средняя линия треугольника ${tri}.`,`Средняя линия параллельна третьей стороне ${third} и равна её половине.`,`Берём длину ${third} и делим на 2: ${txt.split('= ').slice(1).join('= ')}`,`Остальные данные (лишние) для ответа не нужны.`],
+        ['Средняя линия треугольника соединяет середины двух его сторон.','Средняя линия параллельна третьей стороне и равна её половине.'],
+        {rule:'Средняя линия треугольника соединяет середины двух сторон. Она параллельна третьей стороне и равна её половине.',f:`${mid} = ½ · ${third}`,w:[`${mid} — средняя линия`,`${third} — третья сторона, параллельная ${mid}`],rem:'Средняя линия всегда в два раза короче третьей стороны, которой она параллельна.',ex1:`${third} = 10`,ex2:`Тогда средняя линия = 10 ÷ 2 = 5.`});
+    }
+  }
+  const tri=/треугольник/.test(tl);
+  // площадь и периметр по трём сторонам
+  if(tri&&n.length>=3&&!/высот/.test(tl)&&!ang){
+    const [a,b,c]=n;
+    if(a+b<=c||a+c<=b||b+c<=a)return{err:'Такого треугольника не существует: сумма двух сторон должна быть больше третьей.'};
+    if(/периметр/.test(tl)){const P=a+b+c;return mk([`Дано: a = ${fmt(a)}, b = ${fmt(b)}, c = ${fmt(c)}`,'Найти: P',`P = a + b + c = ${fmt(a)} + ${fmt(b)} + ${fmt(c)} = ${fmt(P)}`],'P = '+fmt(P),[`Периметр — сумма всех сторон: ${fmt(a)} + ${fmt(b)} + ${fmt(c)} = ${fmt(P)}.`],['Периметр — сумма длин всех сторон.']);}
+    const p=(a+b+c)/2,s2=p*(p-a)*(p-b)*(p-c),S=Math.sqrt(s2);
+    return mk([`Дано: a = ${fmt(a)}, b = ${fmt(b)}, c = ${fmt(c)}`,'Найти: S',`p = (a + b + c) ÷ 2 = ${fmt(p)} ‖ полупериметр`,`S = √(p(p − a)(p − b)(p − c)) = √(${fmt(p)}·${fmt(p-a)}·${fmt(p-b)}·${fmt(p-c)}) ‖ формула Герона`,`S = √${fmt(s2)} = ${fmt(S,4)}`],'S = '+fmt(S,4),[`Считаем полупериметр p = ${fmt(p)}.`,`Подставляем в формулу Герона и считаем корень.`],['Формула Герона: S = √(p(p − a)(p − b)(p − c)), где p — полупериметр.']);
+  }
+  // углы
+  if(ang&&tri&&n.length>=1){
+    let r,txt,rule;
+    if(/равнобедренн/.test(tl)&&/при вершине/.test(tl)){r=(180-n[0])/2;txt=`(180° − ${fmt(n[0])}°) ÷ 2 = ${fmt(r)}°`;rule='В равнобедренном треугольнике углы при основании равны, а сумма всех углов 180°.';}
+    else if(/равнобедренн/.test(tl)&&/при основании/.test(tl)){r=180-2*n[0];txt=`180° − 2 · ${fmt(n[0])}° = ${fmt(r)}°`;rule='В равнобедренном треугольнике углы при основании равны, а сумма всех углов 180°.';}
+    else if(/прямоугольн/.test(tl)&&n.length===1){r=90-n[0];txt=`90° − ${fmt(n[0])}° = ${fmt(r)}°`;rule='В прямоугольном треугольнике острые углы в сумме дают 90°.';}
+    else if(n.length>=2){r=180-n[0]-n[1];txt=`180° − ${fmt(n[0])}° − ${fmt(n[1])}° = ${fmt(r)}°`;rule='Сумма углов треугольника равна 180°.';}
+    if(r!==undefined){if(r<=0)return{err:'Такого треугольника не существует: углы получаются не меньше нуля.'};return mk(['Дано: '+n.map(x=>fmt(x)+'°').join(', '),'Найти: угол',txt+' ‖ '+rule],fmt(r)+'°',[rule,'Считаем: '+txt],[rule]);}
+  }
+  // диагональ прямоугольника
+  if(/диагонал/.test(tl)&&/прямоугольник/.test(tl)&&n.length>=2){const s=n[0]*n[0]+n[1]*n[1],d=Math.sqrt(s);return mk([`Дано: a = ${fmt(n[0])}, b = ${fmt(n[1])}`,'Найти: d',`d² = a² + b² = ${fmt(n[0])}² + ${fmt(n[1])}² = ${fmt(s)} ‖ теорема Пифагора`,`d = √${fmt(s)} = ${fmt(d,4)}`],'d = '+fmt(d,4),['Диагональ делит прямоугольник на два прямоугольных треугольника.','По теореме Пифагора d² = a² + b².'],['Диагональ прямоугольника: d = √(a² + b²).']);}
+  // трапеция
+  if(/трапеци/.test(tl)&&/средн/.test(tl)&&n.length>=2){const m=(n[0]+n[1])/2;return mk([`Дано: основания ${fmt(n[0])} и ${fmt(n[1])}`,'Найти: среднюю линию',`m = (a + b) ÷ 2 = (${fmt(n[0])} + ${fmt(n[1])}) ÷ 2 = ${fmt(m)}`],'m = '+fmt(m),['Средняя линия трапеции равна полусумме оснований.'],['Средняя линия трапеции: m = (a + b) ÷ 2.']);}
+  if(/трапеци/.test(tl)&&/площад/.test(tl)&&n.length>=3){const S=(n[0]+n[1])/2*n[2];return mk([`Дано: основания ${fmt(n[0])} и ${fmt(n[1])}, высота ${fmt(n[2])}`,'Найти: S',`S = (a + b) ÷ 2 · h = (${fmt(n[0])} + ${fmt(n[1])}) ÷ 2 · ${fmt(n[2])} = ${fmt(S)}`],'S = '+fmt(S),['Площадь трапеции — полусумма оснований, умноженная на высоту.'],['Площадь трапеции: S = (a + b) ÷ 2 · h.']);}
+  // логика: числовой ряд
+  if(/ряд|последовательност|продолж|следующ/.test(tl)&&n.length>=3){
+    const d=n.slice(1).map((x,i)=>x-n[i]),same=a=>a.length>1&&a.every(x=>Math.abs(x-a[0])<1e-9);
+    const L=n.map(x=>fmt(x)).join(', ');
+    if(same(d)){const r=n[n.length-1]+d[0];return mk([`Ряд: ${L}, ?`,`Разность: ${fmt(n[1])} − ${fmt(n[0])} = ${fmt(d[0])} ‖ каждый раз прибавляем одно и то же`,`${fmt(n[n.length-1])} + ${fmt(d[0])} = ${fmt(r)}`],fmt(r),[`Находим, на сколько растёт каждое число: ${fmt(d[0])}.`,`Прибавляем это к последнему числу.`],['Если каждое число больше (или меньше) предыдущего на одно и то же, это арифметическая прогрессия.']);}
+    const q=n.slice(1).map((x,i)=>x/n[i]);
+    if(n[0]!==0&&same(q)){const r=n[n.length-1]*q[0];return mk([`Ряд: ${L}, ?`,`Во сколько раз: ${fmt(n[1])} ÷ ${fmt(n[0])} = ${fmt(q[0])} ‖ каждый раз умножаем`,`${fmt(n[n.length-1])} × ${fmt(q[0])} = ${fmt(r)}`],fmt(r),[`Находим, во сколько раз растёт каждое число: ${fmt(q[0])}.`,`Умножаем последнее число на это.`],['Если каждое число больше предыдущего в одно и то же число раз, это геометрическая прогрессия.']);}
+    if(same(d.slice(1).map((x,i)=>x-d[i]))&&d.length>2){const dd=d[1]-d[0],r=n[n.length-1]+d[d.length-1]+dd;return mk([`Ряд: ${L}, ?`,`Разности: ${d.map(x=>fmt(x)).join(', ')} ‖ они сами растут на ${fmt(dd)}`,`Следующая разность ${fmt(d[d.length-1]+dd)}; ${fmt(n[n.length-1])} + ${fmt(d[d.length-1]+dd)} = ${fmt(r)}`],fmt(r),['Считаем разности соседних чисел.','Разности тоже растут на одно и то же — продолжаем их.'],['Если разности соседних чисел сами идут по порядку, продолжаем ряд разностей.']);}
+  }
+  return null;
+}
+function understand(raw,cls){
+  let t=raw.toLowerCase().replace(/ё/g,'е').replace(/(^|[^а-я])х(?![а-я])/g,'$1x');
+  if(!/[а-я]/.test(t))return solve(raw,cls);
+  {const gt=geoText(raw);if(gt)return gt;}
+  const t0=t;t=fixNums(numWords(t0,true));
+  let pm=t.match(new RegExp(NUMRE+'\\s*(?:%|процент\\w*)\\s*от\\s*'+NUMRE));
+  if(pm){const a=pm[1].replace(',','.'),b=pm[2].replace(',','.');const r=solve(`${a}/100*${b}`,cls);r.said=`${pm[1]}% от ${pm[2]}`;return r;}
+  pm=t.match(new RegExp('сколько процентов.*?'+NUMRE+'\\D+от\\s*'+NUMRE));
+  if(pm){const a=pm[1].replace(',','.'),b=pm[2].replace(',','.');const r=solve(`${a}/${b}*100`,cls);r.said=`${pm[1]} от ${pm[2]}, в процентах`;return r;}
+  let m=fixNums(numWords(t0));FILL.forEach(f=>{m=m.split(f).join(' ');});
+  OPS.forEach(o=>{m=m.split(o[0]).join(' '+o[1]+' ');});
+  m=m.replace(/[?!]/g,' ').replace(/\s+/g,' ').trim();
+  if(!/[а-я]/.test(m)&&/[0-9x]/.test(m)){const r=solve(m,cls);r.said=m;return r;}
+  const n=nums(t);let key=null,vals={};
+  const given=/(площад|периметр)\S*\s+(\S+\s+)?(равн|\d)/.test(t)||/одна сторона|другая сторона|одной стороной/.test(t);
+  if(/пифагор|катет|гипотенуз/.test(t)&&n.length>=2&&!/(найди|найти|чему равен)\s+(второй |другой )?катет/.test(t)){key='pyth';vals={a:n[0],b:n[1]};}
+  else if(/треугольник/.test(t)&&n.length>=2&&/высот|основан/.test(t)&&!given){key='tri';vals={a:n[0],h:n[1]};}
+  else if(/прямоугольник/.test(t)&&n.length===2&&!given){key='rect';vals={a:n[0],b:n[1]};}
+  else if(/квадрат/.test(t)&&!/в квадрате|уравнен/.test(t)&&n.length===1&&!given){key='square';vals={a:n[0]};}
+  else if(/круг|окружност/.test(t)&&n.length===1&&!given){key='circle';vals={r:/диаметр/.test(t)?n[0]/2:n[0]};}
+  if(key){const r=solveGeo(key,vals,cls);r.said=GEO[key].name+': '+GEO[key].f.map(f=>f[0]+' = '+fmt(vals[f[0]])).join(', ');return r;}
+  if(n.length===3&&/остал|остан/.test(t)&&/стоил|стоит|стоят|цена|по \d|кажд/.test(t))return msSolve(n,raw,cls);
+  if(n.length>=2){
+    let op=null;
+    if(/в кажд|по кажд| по \d|умнож|раза? больше/.test(t))op='*';
+    else if(/поровну|раздел|подели|раза? меньше|каждому/.test(t))op='/';
+    else if(/остал\w*|остан\w*|отдал|потерял|съел|убрал|забрал|продал|израсходовал|меньше на|разност|уехал|улетел|ушл|сдачу|сдача/.test(t))op='-';
+    else if(/всего|вместе|еще|добавил|прибавил|дали|принес|подарил|больше на|сумм|стало/.test(t))op='+';
+    if(op){
+      if(/средн|скорост|скидк|потом|затем|задума|старше|младше|процент|%/.test(t)||n.length>3||(/раз/.test(t)&&/вместе|всего|сумм/.test(t)))return{err:'Эта задача сложнее, чем я умею решать без нейросети. Подключите ИИ в приложении (APK) или разбейте задачу на простые части.'};
+      const nn=n.slice();
+      if(op==='-'||op==='/')nn.sort((a,b)=>b-a);
+      if((op==='*'||op==='/')&&nn.length>2)return{err:'Здесь несколько действий сразу. Разбейте задачу на части и решайте по очереди.'};
+      return wpSolve(op,nn,raw,cls);
+    }
+  }
+  return{err:'Не понял задачу. Словами я понимаю простые задачи: сложение, вычитание, умножение, деление, проценты, корни, степени и геометрию. Запишите примером или уравнением.'};
+}
+function dictate(cb){
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  const bad=c=>{$('inp').focus();$('out').innerHTML='<div class="paper err">Диктовка в браузере не сработала'+(c?' ('+c+')':'')+'. Нажмите значок микрофона на клавиатуре телефона, он надиктует прямо в строку ввода (поле уже выбрано). Свою диктовку сделаем в APK.</div>';};
+  if(!SR)return bad('нет поддержки');
+  const r=new SR();r.lang='ru-RU';r.interimResults=false;r.continuous=false;
+  r.onresult=e=>{$('inp').value=fixNums(e.results[0][0].transcript);cb();};
+  r.onerror=e=>bad(e.error);
+  r.onnomatch=()=>bad('не расслышал');
+  $('out').innerHTML='<div class="paper">🎤 Говорите…</div>';
+  try{r.start();}catch(e){bad('старт');}
+}
+function loadTess(){return new Promise((ok,no)=>{if(window.Tesseract)return ok();const s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';s.onload=ok;s.onerror=()=>no(new Error('offline'));document.head.appendChild(s);});}
+async function ocr(file){
+  if('TextDetector' in window){try{const b=await createImageBitmap(file);const r=await new TextDetector().detect(b);const t=r.map(x=>x.rawValue).join(' ');if(t.trim())return t;}catch(e){}}
+  await loadTess();
+  return(await Tesseract.recognize(file,'rus+eng')).data.text;
+}
+
+/* ---------- ЭКРАН ---------- */
+/* ---------- ИИ (подключается в APK) ---------- */
+const AI_PROMPT='Ты переводишь школьные задачи в JSON. Ответ — только одна строка JSON.\nФорматы:\n{"t":"expr","v":"пример"} — если задача решается одним примером (знаки + - * / ( ) ^ √)\n{"t":"eq","v":"уравнение"} — если нужно найти неизвестное x\nПримеры:\nЗадача: У Маши было 20 рублей, она купила 3 конфеты по 4 рубля. Сколько рублей осталось?\n{"t":"expr","v":"20-3*4"}\nЗадача: Брат старше сестры в 3 раза, вместе им 24 года. Сколько лет сестре?\n{"t":"eq","v":"x+3x=24"}\nЗадача: Мама испекла пирогов в 2 раза больше, чем бабушка. Вместе 15 пирогов. Сколько испекла бабушка?\n{"t":"eq","v":"x+2x=15"}\nЗадача: Машина проехала 100 км за 2 часа, потом 150 км за 3 часа. Какая средняя скорость?\n{"t":"expr","v":"(100+150)/(2+3)"}\nЗадача: Задумали число, прибавили 5, умножили на 2, получили 30. Какое число?\n{"t":"eq","v":"2(x+5)=30"}\nЗадача: Задумали число, умножили на 4, вычли 6, получили 22. Какое число?\n{"t":"eq","v":"4x-6=22"}\nЗадача: Цена 800 рублей, скидка 25%. Сколько стоит?\n{"t":"expr","v":"800*0.75"}\nЗадача: Площадь прямоугольника 40, одна сторона 5. Найди периметр.\n{"t":"expr","v":"2*(5+40/5)"}\nЗадача: ';
+async function aiParse(text){
+  window.__aiErr='';
+  if(typeof window==='undefined'||!window.AndroidAI||!window.AndroidAI.ask)return null;
+  try{
+    const out=String(await new Promise(res=>{window.__aiDone=res;window.AndroidAI.ask(AI_PROMPT+text);}));
+    if(out.indexOf('ERR:')===0){window.__aiErr=out.slice(4);return null;}
+    const m=out.match(/\{[\s\S]*?\}/);
+    if(!m){window.__aiErr='нейросеть ответила не по формату: «'+out.slice(0,150)+'»';return null;}
+    const o=JSON.parse(m[0]);
+    if((o.t==='expr'||o.t==='eq')&&typeof o.v==='string')return o;
+    window.__aiErr='нейросеть ответила: «'+m[0].slice(0,150)+'»';return null;
+  }catch(e){window.__aiErr='ошибка '+e;return null;}
+}
+const esc=s=>String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function render(res,task,cls){
+  const box=$('out');
+  if(res.err){box.innerHTML=`<div class="paper err">${res.err}</div>`;return;}
+  const lines=(res.nb||[]).map((s,i)=>{const p=s.split(' ‖ ');s=p[0]+(p[1]?`<span class="cm">← ${p[1]}</span>`:'');return `<div class="ln${/^Ответ/.test(p[0])?' red':''}" style="animation-delay:${(i*0.5).toFixed(1)}s;transform:rotate(${(Math.random()*1.2-0.6).toFixed(2)}deg) translateX(${Math.floor(Math.random()*6)}px)">${s}</div>`;}).join('');
+  const w=res.wp;
+  const rule=w?`<div class="rule">${w.rule}</div><div class="rule">${w.f}<br>где:<br>${w.w.map(x=>'• '+x).join('<br>')}</div>`:res.rules.map(s=>`<div class="rule">${s}</div>`).join('');
+  box.innerHTML=
+    `<h2>📓 Решала</h2><div class="cls">${cls} класс</div>`+
+    `<h3>Задача:</h3><div class="paper">${esc(task||'')}</div>`+
+    (res.said?`<div class="paper said">Понял так: ${res.said}</div>`:'')+
+    (res.note?`<div class="paper said">${res.note}</div>`:'')+
+    `<h3>Решение:</h3><div class="nb">${lines}</div>`+
+    `<h3>Правило:</h3>${rule}`+
+    `<h3>Объяснение по шагам:</h3><div class="paper"><ol>${res.steps.map(s=>`<li>${s}</li>`).join('')}</ol></div>`+
+    (w?`<h3>📌 Запомни:</h3><div class="rule">${w.rem}<br><b>Пример:</b><br>${w.ex1}<br>${w.ex2}</div>`:'');
+}
+function init(){
+  const cls=$('cls');
+  for(let i=1;i<=11;i++)cls.add(new Option(i+' класс',i));
+  try{cls.value=localStorage.getItem('cls')||'5';}catch(e){cls.value='5';}
+  cls.onchange=()=>{try{localStorage.setItem('cls',cls.value);}catch(e){}};
+  ['(',')','+','−','×','÷','^','√','∛','x','='].forEach(k=>{
+    const b=document.createElement('button');b.textContent=k;
+    b.onclick=()=>{const el=$('inp'),a=el.selectionStart==null?el.value.length:el.selectionStart,e=el.selectionEnd==null?a:el.selectionEnd;el.value=el.value.slice(0,a)+k+el.value.slice(e);el.focus();const p=a+k.length;el.setSelectionRange(p,p);};
+    $('keys').appendChild(b);
+  });
+  const go=async()=>{
+    const raw=$('inp').value,c=+cls.value;
+    let res=understand(raw,c);
+    const ai=!!(window.AndroidAI&&AndroidAI.ready&&AndroidAI.ready());
+    if(res.err&&window.AndroidAI&&!ai)res.err+=' Нажмите «🤖 Подключить ИИ» вверху, и я смогу решать такие задачи.';
+    if(res.err&&ai){
+      $('out').innerHTML='<div class="paper">🤖 Думаю…</div>';
+      const o=await aiParse(raw);
+      if(o){const r=solve(o.v,c);if(!r.err){r.said='ИИ понял так: '+esc(o.v);res=r;}else window.__aiErr='ИИ записал «'+o.v+'», но я не смог это решить ('+r.err+')';}
+      if(res.err)res.err='ИИ не помог: '+esc(window.__aiErr||'нет ответа');
+    }
+    render(res,raw,cls.value);
+  };
+  $('go').onclick=go;
+  $('mic').onclick=()=>dictate(go);
+  $('cam').onclick=()=>$('ph2').click();
+  $('gal').onclick=()=>$('ph').click();
+  const onPhoto=async e=>{const f=e.target.files[0];if(!f)return;$('out').innerHTML='<div class="paper">Распознаю фото…</div>';
+    try{const t=await ocr(f);$('inp').value=t.trim().replace(/\s*\n\s*/g,' ');go();$('out').insertAdjacentHTML('afterbegin','<div class="paper said">Проверьте, правильно ли распознан текст в строке ввода, и нажмите «Решить».</div>');}
+    catch(err){$('out').innerHTML='<div class="paper err">Фото без интернета пока не читается: офлайн-распознавание добавим в APK. Введите условие текстом или голосом.</div>';}
+    e.target.value='';};
+  $('ph').onchange=onPhoto;$('ph2').onchange=onPhoto;
+  $('inp').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();$('go').click();}};
+  const geo=$('geo');
+  for(const k in GEO)geo.add(new Option(GEO[k].name,k));
+  const fields=()=>{
+    $('fields').innerHTML=GEO[geo.value].f.map(f=>`<input id="g_${f[0]}" type="number" step="any" inputmode="decimal" placeholder="${f[1]}">`).join('');
+  };
+  geo.onchange=fields;fields();
+  $('go2').onclick=()=>{
+    const v={};
+    GEO[geo.value].f.forEach(f=>{v[f[0]]=parseFloat($('g_'+f[0]).value.replace(',','.'));});
+    render(solveGeo(geo.value,v,+cls.value),GEO[geo.value].name+': '+GEO[geo.value].f.map(f=>f[0]+' = '+(v[f[0]]||'?')).join(', '),cls.value);
+  };
+  const tab=n=>{
+    $('s1').className=n===1?'':'hide';$('s2').className=n===2?'':'hide';
+    $('t1').className=n===1?'on':'';$('t2').className=n===2?'on':'';
+    $('out').innerHTML='';
+  };
+  $('t1').onclick=()=>tab(1);$('t2').onclick=()=>tab(2);
+  if(window.AndroidAI){
+    const b=$('aibtn');b.className='';
+    const upd=()=>{b.textContent=AndroidAI.ready()?'🤖 ИИ подключён':'🤖 Подключить ИИ (выбрать файл модели)';};
+    upd();
+    b.onclick=()=>{if(!AndroidAI.ready())AndroidAI.pickModel();};
+    window.__aiStatus=s=>{b.textContent='🤖 '+s;};
+    window.__aiReady=ok=>{upd();if(!ok)b.textContent='🤖 Не получилось, попробуйте ещё раз';};
+  }
+}
+if(typeof document!=='undefined')init();
+
+</script>
+</body></html>
